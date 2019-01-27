@@ -68,7 +68,11 @@ func TestConformance(t *testing.T) {
 
 func BenchmarkRabbit(b *testing.B) {
 	ctx := context.Background()
-	h := &harness{conn: mustDialRabbit(b)}
+	conn := mustDialRabbit(b)
+	if _, isFake := conn.(*fakeConnection); isFake {
+		b.Fatal("attempt to benchmark fake rabbit; start a real rabbit server first")
+	}
+	h := &harness{conn: conn}
 	dt, cleanup, err := h.CreateTopic(ctx, b.Name())
 	if err != nil {
 		b.Fatal(err)
