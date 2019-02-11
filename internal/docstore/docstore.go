@@ -23,6 +23,7 @@ package docstore // import "gocloud.dev/internal/docstore"
 import (
 	"context"
 	"strings"
+	"unicode/utf8"
 
 	"gocloud.dev/internal/docstore/driver"
 	"gocloud.dev/internal/gcerr"
@@ -45,11 +46,12 @@ type Collection struct {
 	driver driver.Collection
 }
 
-// NewCollection makes a Collection.
-func NewCollection(d driver.Collection) *Collection {
-	return &Collection{
-		driver: d,
-	}
+// NewCollection is intended for use by provider implementations.
+var NewCollection = newCollection
+
+// newCollection makes a Collection.
+func newCollection(d driver.Collection) *Collection {
+	return &Collection{driver: d}
 }
 
 // Actions returns an ActionList that can be used to perform
@@ -79,8 +81,9 @@ func (l *ActionList) add(a *Action) *ActionList {
 }
 
 // Create adds an action that creates a new document.
-// The document must not already exist; an AlreadyExists error is returned if it does.
-// If the document doesn't have key fields, it will be given key fields with unique values.
+// The document must not already exist; an AlreadyExists error is returned if it
+// does. If the document doesn't have key fields, it will be given key fields with
+// unique values.
 func (l *ActionList) Create(doc Document) *ActionList {
 	return l.add(&Action{kind: driver.Create, doc: doc})
 }
@@ -110,11 +113,11 @@ func (l *ActionList) Put(doc Document) *ActionList {
 // error is returned if the stored document's revision does not match the
 // given document's.
 func (l *ActionList) Delete(doc Document) *ActionList {
-	// Rationale for not returning an error on not found: returning an error
-	// might be informative and could be ignored; but if the semantics of an
-	// action list are to stop at first error, then we might abort a list of Deletes
-	// just because one of the docs was not present, and that seems wrong, or at least
-	// something you'd want to turn off.
+	// Rationale for not returning an error if the document does not exist:
+	// Returning an error might be informative and could be ignored, but if the
+	// semantics of an action list are to stop at first error, then we might abort a
+	// list of Deletes just because one of the docs was not present, and that seems
+	// wrong, or at least something you'd want to turn off.
 	return l.add(&Action{kind: driver.Delete, doc: doc})
 }
 
@@ -124,8 +127,8 @@ func (l *ActionList) Delete(doc Document) *ActionList {
 // retrieved document. If fps is present, only the given field paths are
 // set. In both cases, other fields of doc are not touched.
 //
-// A field path is a dot-separated sequence of field names. A field path
-// can select top level fields or elements of maps. There is no way to
+// A field path is a dot-separated sequence of UTF-8 field names. A field path
+// can select top level fields or elements of sub-documents. There is no way to
 // select a single list element.
 func (l *ActionList) Get(doc Document, fps ...string) *ActionList {
 	return l.add(&Action{
@@ -192,6 +195,7 @@ func (a *Action) toDriverAction() (*driver.Action, error) {
 		}
 	}
 	if a.mods != nil {
+		// TODO(jba): check for prefix
 		for k, v := range a.mods {
 			fp, err := parseFieldPath(k)
 			if err != nil {
@@ -204,6 +208,9 @@ func (a *Action) toDriverAction() (*driver.Action, error) {
 }
 
 func parseFieldPath(s string) ([]string, error) {
+	if !utf8.ValidString(s) {
+		return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "invalid UTF-8 field path %q", s)
+	}
 	fp := strings.Split(s, ".")
 	for _, c := range fp {
 		if c == "" {

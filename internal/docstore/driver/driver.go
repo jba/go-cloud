@@ -22,10 +22,20 @@ import (
 	"gocloud.dev/internal/gcerr"
 )
 
+// A Collection is a set of documents.
 type Collection interface {
+	// RunActions executes a sequence of actions.
+	// Implementations are free to execute the actions however they wish, but it must
+	// appear as if they were executed in order. The actions need not happen
+	// atomically. The first return value is the number of actions successfully
+	// executed. It is returned even if err != nil.
 	RunActions(context.Context, []*Action) (int, error)
-	RunQuery(context.Context, *Query) error
+
+	// ErrorCode should return a code that describes the error, which was returned by
+	// one of the other methods in this interface.
 	ErrorCode(error) gcerr.ErrorCode
+
+	RunQuery(context.Context, *Query) error
 }
 
 type ActionKind int
