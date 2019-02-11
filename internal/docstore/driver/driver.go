@@ -23,7 +23,6 @@ import (
 )
 
 type Collection interface {
-	KeyFields() []string
 	RunActions(context.Context, []*Action) (int, error)
 	RunQuery(context.Context, *Query) error
 	ErrorCode(error) gcerr.ErrorCode

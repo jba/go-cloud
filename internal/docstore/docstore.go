@@ -42,15 +42,13 @@ type Document = interface{}
 
 // A Collection is a set of documents.
 type Collection struct {
-	driver    driver.Collection
-	keyFields []string
+	driver driver.Collection
 }
 
 // NewCollection makes a Collection.
 func NewCollection(d driver.Collection) *Collection {
 	return &Collection{
-		driver:    d,
-		keyFields: d.KeyFields(),
+		driver: d,
 	}
 }
 
@@ -82,7 +80,7 @@ func (l *ActionList) add(a *Action) *ActionList {
 
 // Create adds an action that creates a new document.
 // The document must not already exist; an AlreadyExists error is returned if it does.
-// If the document doesn't have key fields, they will be added to it.
+// If the document doesn't have key fields, it will be given key fields with unique values.
 func (l *ActionList) Create(doc Document) *ActionList {
 	return l.add(&Action{kind: driver.Create, doc: doc})
 }
