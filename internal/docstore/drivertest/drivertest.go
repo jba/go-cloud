@@ -51,7 +51,7 @@ func RunConformanceTests(t *testing.T, newHarness HarnessMaker) {
 	t.Run("Data", func(t *testing.T) { withCollection(t, newHarness, testData) })
 }
 
-const keyField = "_id"
+const KeyField = "_id"
 
 func withCollection(t *testing.T, newHarness HarnessMaker, f func(*testing.T, *ds.Collection)) {
 	ctx := context.Background()
@@ -69,11 +69,13 @@ func withCollection(t *testing.T, newHarness HarnessMaker, f func(*testing.T, *d
 	f(t, coll)
 }
 
-var nonexistentDoc = ds.Document{keyField: "doesNotExist"}
+type docmap = map[string]interface{}
+
+var nonexistentDoc = docmap{KeyField: "doesNotExist"}
 
 func testCreate(t *testing.T, coll *ds.Collection) {
-	named := ds.Document{keyField: "testCreate1", "b": true}
-	unnamed := ds.Document{"b": false}
+	named := docmap{KeyField: "testCreate1", "b": true}
+	unnamed := docmap{"b": false}
 	// Attempt to clean up
 	defer func() {
 		_, _ = coll.Actions().Delete(named).Delete(unnamed).Do(context.Background())
@@ -86,14 +88,14 @@ func testCreate(t *testing.T, coll *ds.Collection) {
 }
 
 func testPut(t *testing.T, coll *ds.Collection) {
-	named := ds.Document{keyField: "testPut1", "b": true}
+	named := docmap{KeyField: "testPut1", "b": true}
 	mustRunAndCompare(t, coll, named, coll.Actions().Put(named)) // create new
 	named["b"] = false
 	mustRunAndCompare(t, coll, named, coll.Actions().Put(named)) // replace existing
 }
 
 func testReplace(t *testing.T, coll *ds.Collection) {
-	doc1 := ds.Document{keyField: "testReplace", "s": "a"}
+	doc1 := docmap{KeyField: "testReplace", "s": "a"}
 	mustRun(t, coll.Actions().Put(doc1))
 
 	doc1["s"] = "b"
@@ -104,15 +106,15 @@ func testReplace(t *testing.T, coll *ds.Collection) {
 }
 
 func testGet(t *testing.T, coll *ds.Collection) {
-	doc := ds.Document{
-		keyField: "testGet1",
+	doc := docmap{
+		KeyField: "testGet1",
 		"s":      "a string",
 		"i":      int64(95),
 		"f":      32.3,
 	}
 	mustRun(t, coll.Actions().Put(doc))
 
-	checkGet := func(got, want ds.Document) {
+	checkGet := func(got, want docmap) {
 		t.Helper()
 		mustRun(t, coll.Actions().Get(got))
 		if diff := cmp.Diff(got, want); diff != "" {
@@ -121,18 +123,18 @@ func testGet(t *testing.T, coll *ds.Collection) {
 	}
 
 	// If only the key fields are present, the full document is populated.
-	checkGet(ds.Document{keyField: doc[keyField]}, doc)
+	checkGet(docmap{KeyField: doc[KeyField]}, doc)
 
 	// If other fields are present, only they are populated.
 	// checkGet(
-	// 	ds.Document{keyField: doc[keyField], "s": nil},
-	// 	ds.Document{keyField: doc[keyField], "s": doc["s"]},
+	// 	docmap{KeyField: doc[KeyField], "s": nil},
+	// 	docmap{KeyField: doc[KeyField], "s": doc["s"]},
 	// )
 
 	// // If fields not in the original doc are present, they may or may not be present in the answer.
-	// got := ds.Document{keyField: doc[keyField], "i": nil, "junk": 3}
+	// got := docmap{KeyField: doc[KeyField], "i": nil, "junk": 3}
 	// mustRun(t, coll.Actions().Get(got))
-	// want := ds.Document{keyField: doc[keyField], "i": doc["i"]}
+	// want := docmap{KeyField: doc[KeyField], "i": doc["i"]}
 	// if !cmp.Equal(got, want) {
 	// 	want["junk"] = 3
 	// 	if !cmp.Equal(got, want) {
@@ -142,24 +144,25 @@ func testGet(t *testing.T, coll *ds.Collection) {
 }
 
 func testDelete(t *testing.T, coll *ds.Collection) {
-	doc := ds.Document{keyField: "testDelete"}
+	doc := docmap{KeyField: "testDelete"}
 	mustRun(t, coll.Actions().Put(doc).Delete(doc))
 	shouldFail(t, coll.Actions().Get(doc))
-	shouldFail(t, coll.Actions().Delete(nonexistentDoc))
+	// Delete doesn't fail if the doc doesn't exist.
+	mustRun(t, coll.Actions().Delete(nonexistentDoc))
 }
 
 func testUpdate(t *testing.T, coll *ds.Collection) {
-	doc := ds.Document{keyField: "testUpdate", "a": "A", "b": "B"}
+	doc := docmap{KeyField: "testUpdate", "a": "A", "b": "B"}
 	mustRun(t, coll.Actions().Put(doc))
 
-	got := ds.Document{keyField: doc[keyField]}
+	got := docmap{KeyField: doc[KeyField]}
 	mustRun(t, coll.Actions().Update(doc, ds.Mods{
 		"a": "X",
 		"b": nil,
 		"c": "C",
 	}).Get(got))
-	want := ds.Document{
-		keyField: doc[keyField],
+	want := docmap{
+		KeyField: doc[KeyField],
 		"a":      "X",
 		"c":      "C",
 	}
@@ -189,10 +192,10 @@ func testData(t *testing.T, coll *ds.Collection) {
 		{float32(3.5), float64(3.5)},
 		{[]byte{0, 1, 2}, []byte{0, 1, 2}},
 	} {
-		doc := ds.Document{keyField: "testData", "val": test.in}
-		got := ds.Document{keyField: doc[keyField]}
+		doc := docmap{KeyField: "testData", "val": test.in}
+		got := docmap{KeyField: doc[KeyField]}
 		mustRun(t, coll.Actions().Put(doc).Get(got))
-		want := ds.Document{keyField: doc[keyField], "val": test.want}
+		want := docmap{KeyField: doc[KeyField], "val": test.want}
 		if len(got) != len(want) {
 			t.Errorf("%v: got %v, want %v", test.in, got, want)
 		} else if g := got["val"]; !cmp.Equal(g, test.want) {
@@ -211,10 +214,10 @@ func mustRun(t *testing.T, al *ds.ActionList) {
 	}
 }
 
-func mustRunAndCompare(t *testing.T, coll *ds.Collection, doc ds.Document, al *ds.ActionList) {
+func mustRunAndCompare(t *testing.T, coll *ds.Collection, doc docmap, al *ds.ActionList) {
 	t.Helper()
 	mustRun(t, al)
-	got := ds.Document{keyField: doc[keyField]}
+	got := docmap{KeyField: doc[KeyField]}
 	mustRun(t, coll.Actions().Get(got))
 	if diff := cmp.Diff(got, doc); diff != "" {
 		t.Fatalf(diff)

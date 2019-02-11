@@ -87,9 +87,10 @@ func TestSet(t *testing.T) {
 		{"S.m.J", -4},
 		{"S.M.T.I", -5},
 		{"S.m.T.i", -6},
+		{"new.field", -7},
 	} {
 		fp := strings.Split(test.fp, ".")
-		if err := doc.set(fp, test.val); err != nil {
+		if err := doc.Set(fp, test.val); err != nil {
 			t.Fatalf("%q: %v", test.fp, err)
 		}
 		got, err := doc.Get(fp)

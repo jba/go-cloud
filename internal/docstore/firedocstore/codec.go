@@ -15,11 +15,15 @@
 package firedocstore
 
 import (
+	"fmt"
+	"reflect"
+	"time"
+
+	"gocloud.dev/internal/docstore/driver"
+
 	pb "google.golang.org/genproto/googleapis/firestore/v1beta1"
-	tspb "github.com/golang/protobuf/ptypes/timestamp"
 	"google.golang.org/genproto/googleapis/type/latlng"
 )
-
 
 func encodeDoc(doc driver.Document) (map[string]*pb.Value, error) {
 	var e encoder
@@ -53,7 +57,6 @@ func isLeafType(t reflect.Type) bool {
 	return t == typeOfGoTime || t == typeOfLatLng || t == typeOfProtoTimestamp
 }
 
-
 func (e *encoder) EncodeNull()           { e.pv = nullValue }
 func (e *encoder) EncodeBool(x bool)     { e.pv = &pb.Value{ValueType: &pb.Value_BooleanValue{x}} }
 func (e *encoder) EncodeInt(x int64)     { e.pv = &pb.Value{ValueType: &pb.Value_IntegerValue{x}} }
@@ -77,7 +80,7 @@ func (e *encoder) EncodeList(n int) driver.Encoder {
 }
 
 func (e *encoder) EncodeStruct(s reflect.Value) (bool, error) {
-
+}
 
 func (e *encoder) EncodeMap(n int) driver.Encoder {
 	m := make(map[string]*pb.Value, n)

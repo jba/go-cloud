@@ -15,10 +15,16 @@
 package firedocstore // import "gocloud.dev/internal/docstore/firedocstore"
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"reflect"
+	"regexp"
+	"strings"
 
+	"cloud.google.com/go/firestore"
 	vkit "cloud.google.com/go/firestore/apiv1beta1"
 	tspb "github.com/golang/protobuf/ptypes/timestamp"
 	"gocloud.dev/internal/docstore"

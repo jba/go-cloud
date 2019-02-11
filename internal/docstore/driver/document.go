@@ -17,6 +17,7 @@ package driver
 import (
 	"reflect"
 
+	"gocloud.dev/gcerrors"
 	"gocloud.dev/internal/docstore/internal/fields"
 	"gocloud.dev/internal/gcerr"
 )
@@ -50,6 +51,11 @@ func NewDocument(doc interface{}) (Document, error) {
 	return Document{s: v, fields: fields}, nil
 }
 
+// TODO(jba): remove this method after memdocstore uses the codec framework.
+func (d Document) Map() map[string]interface{} {
+	return d.m
+}
+
 func (d Document) GetField(field string) (interface{}, error) {
 	if d.m != nil {
 		x, ok := d.m[field]
@@ -66,23 +72,29 @@ func (d Document) GetField(field string) (interface{}, error) {
 	}
 }
 
-func (d Document) getDocument(fp []string) (Document, error) {
+func (d Document) getDocument(fp []string, create bool) (Document, error) {
 	if len(fp) == 0 {
 		return d, nil
 	}
 	x, err := d.GetField(fp[0])
 	if err != nil {
-		return Document{}, err
+		if create && gcerrors.Code(err) == gcerrors.NotFound {
+			// TODO(jba): create the right type for the struct field.
+			x = map[string]interface{}{}
+			d.SetField(fp[0], x)
+		} else {
+			return Document{}, err
+		}
 	}
 	d2, err := NewDocument(x)
 	if err != nil {
 		return Document{}, err
 	}
-	return d2.getDocument(fp[1:])
+	return d2.getDocument(fp[1:], create)
 }
 
 func (d Document) Get(fp []string) (interface{}, error) {
-	d2, err := d.getDocument(fp[:len(fp)-1])
+	d2, err := d.getDocument(fp[:len(fp)-1], false)
 	if err != nil {
 		return nil, err
 	}
@@ -102,9 +114,9 @@ func (d Document) structField(name string) (reflect.Value, error) {
 	return fv, nil
 }
 
-// Does this need to create sub-maps, etc. as necessary?
-func (d Document) set(fp []string, val interface{}) error {
-	d2, err := d.getDocument(fp[:len(fp)-1])
+// This creates sub-maps as necessary, if possible.
+func (d Document) Set(fp []string, val interface{}) error {
+	d2, err := d.getDocument(fp[:len(fp)-1], true)
 	if err != nil {
 		return err
 	}

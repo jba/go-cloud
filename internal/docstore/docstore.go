@@ -144,12 +144,15 @@ func (l *ActionList) Get(doc Document, fps ...string) *ActionList {
 // error is returned if the stored document's revision does not match the
 // given document's.
 //
+// A modification will create a field if it doesn't exist.
+//
 // No field path in mods can be a prefix of another. (It makes no sense
 // to, say, set foo but increment foo.bar.)
 //
-// Update does not modify doc. To obtain the new value of doc, call Get
-// after calling Update.
+// Update does not modify its doc argument. To obtain the new value of the document,
+// call Get after calling Update.
 func (l *ActionList) Update(doc Document, mods Mods) *ActionList {
+	// TODO(jba): can Update create a new field, or only change existing ones?
 	return l.add(&Action{
 		kind: driver.Update,
 		doc:  doc,
@@ -158,6 +161,7 @@ func (l *ActionList) Update(doc Document, mods Mods) *ActionList {
 }
 
 // Mods is a map from field paths to modifications.
+// A field path is a dot-separated sequence of UTF-8 field names.
 // See ActionList.Update.
 type Mods map[string]interface{}
 
