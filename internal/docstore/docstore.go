@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"gocloud.dev/internal/docstore/driver"
+	"gocloud.dev/internal/gcerr"
 )
 
 // RevisionField is the name of the document field used for document revision
@@ -38,11 +39,6 @@ const RevisionField = "DocstoreRevision"
 // It can be represented as a map[string]int or a pointer to a struct.
 // For structs, the exported fields are the document fields.
 type Document = interface{}
-
-type (
-	Error     = driver.Error
-	ErrorCode = driver.ErrorCode
-)
 
 // A Collection is a set of documents.
 type Collection struct {
@@ -173,11 +169,12 @@ func (l *ActionList) Do(ctx context.Context) (int, error) {
 	for _, a := range l.actions {
 		d, err := a.toDriverAction()
 		if err != nil {
-			return 0, err
+			return 0, wrapError(l.coll.driver, err)
 		}
 		das = append(das, d)
 	}
-	return l.coll.driver.RunActions(ctx, das)
+	n, err := l.coll.driver.RunActions(ctx, das)
+	return n, wrapError(l.coll.driver, err)
 }
 
 func (a *Action) toDriverAction() (*driver.Action, error) {
@@ -212,8 +209,20 @@ func parseFieldPath(s string) ([]string, error) {
 	fp := strings.Split(s, ".")
 	for _, c := range fp {
 		if c == "" {
-			return nil, driver.Errorf(driver.InvalidArgument, nil, "empty component in field path %q", s)
+			return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "empty component in field path %q", s)
 		}
 	}
 	return fp, nil
 }
+
+func wrapError(c driver.Collection, err error) error {
+	if err == nil {
+		return nil
+	}
+	if gcerr.DoNotWrap(err) {
+		return err
+	}
+	return gcerr.New(c.ErrorCode(err), err, 2, "docstore")
+}
+
+// TODO(jba): ErrorAs

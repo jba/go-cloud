@@ -18,6 +18,7 @@ import (
 	"reflect"
 
 	"gocloud.dev/internal/docstore/internal/fields"
+	"gocloud.dev/internal/gcerr"
 )
 
 var fieldCache = fields.NewCache(nil, nil, nil)
@@ -40,7 +41,7 @@ func NewDocument(doc interface{}) (Document, error) {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
-		return Document{}, Errorf(InvalidArgument, nil, "expecting struct or map[string]interface{}, got %s", t)
+		return Document{}, gcerr.Newf(gcerr.InvalidArgument, nil, "expecting struct or map[string]interface{}, got %s", t)
 	}
 	fields, err := fieldCache.Fields(t)
 	if err != nil {
@@ -53,7 +54,7 @@ func (d Document) GetField(field string) (interface{}, error) {
 	if d.m != nil {
 		x, ok := d.m[field]
 		if !ok {
-			return nil, Errorf(NotFound, nil, "field %q not found in map", field)
+			return nil, gcerr.Newf(gcerr.NotFound, nil, "field %q not found in map", field)
 		}
 		return x, nil
 	} else {
@@ -91,11 +92,11 @@ func (d Document) Get(fp []string) (interface{}, error) {
 func (d Document) structField(name string) (reflect.Value, error) {
 	f := d.fields.Match(name)
 	if f == nil {
-		return reflect.Value{}, Errorf(NotFound, nil, "field %q not found in struct type %s", name, d.s.Type())
+		return reflect.Value{}, gcerr.Newf(gcerr.NotFound, nil, "field %q not found in struct type %s", name, d.s.Type())
 	}
 	fv, ok := fieldByIndex(d.s, f.Index)
 	if !ok {
-		return reflect.Value{}, Errorf(InvalidArgument, nil, "nil embedded pointer; cannot get field %q from %s",
+		return reflect.Value{}, gcerr.Newf(gcerr.InvalidArgument, nil, "nil embedded pointer; cannot get field %q from %s",
 			name, d.s.Type())
 	}
 	return fv, nil
@@ -120,7 +121,7 @@ func (d Document) SetField(field string, val interface{}) error {
 		return err
 	}
 	if !v.CanSet() {
-		return Errorf(InvalidArgument, nil, "cannot set field %s in struct of type %s: not addressable",
+		return gcerr.Newf(gcerr.InvalidArgument, nil, "cannot set field %s in struct of type %s: not addressable",
 			field, d.s.Type())
 	}
 	v.Set(reflect.ValueOf(val))

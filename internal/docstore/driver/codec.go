@@ -22,6 +22,7 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	"gocloud.dev/internal/docstore/internal/fields"
+	"gocloud.dev/internal/gcerr"
 )
 
 var (
@@ -57,7 +58,7 @@ type Encoder interface {
 // TODO: for efficiency, enable encoding of only a subset of field paths.
 
 func Encode(v reflect.Value, e Encoder) error {
-	return wrap(encode(v, e), InvalidArgument)
+	return wrap(encode(v, e), gcerr.InvalidArgument)
 }
 
 func encode(v reflect.Value, enc Encoder) error {
@@ -133,7 +134,7 @@ func encode(v reflect.Value, enc Encoder) error {
 		return encodeStruct(v, enc)
 
 	default:
-		return Errorf(InvalidArgument, nil, "cannot encode type %s", v.Type())
+		return gcerr.Newf(gcerr.InvalidArgument, nil, "cannot encode type %s", v.Type())
 	}
 	return nil
 }
@@ -193,7 +194,7 @@ func stringifyMapKey(k reflect.Value) (string, error) {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return strconv.FormatUint(k.Uint(), 10), nil
 	default:
-		return "", Errorf(InvalidArgument, nil, "cannot encode key %s of type %s", k, k.Type())
+		return "", gcerr.Newf(gcerr.InvalidArgument, nil, "cannot encode key %s of type %s", k, k.Type())
 	}
 }
 
@@ -280,7 +281,7 @@ type Decoder interface {
 
 // Decode d into v.
 func Decode(v reflect.Value, d Decoder) error {
-	return wrap(decode(v, d), InvalidArgument)
+	return wrap(decode(v, d), gcerr.InvalidArgument)
 }
 
 func decode(v reflect.Value, d Decoder) error {
@@ -456,7 +457,7 @@ func prepareLength(v reflect.Value, wantLen int) error {
 	} else { // array
 		switch {
 		case vLen < wantLen: // v too short
-			return Errorf(InvalidArgument, nil, "array length %d is too short for incoming list of length %d",
+			return gcerr.Newf(gcerr.InvalidArgument, nil, "array length %d is too short for incoming list of length %d",
 				vLen, wantLen)
 		case vLen > wantLen: // v too long; set extra elements to zero
 			z := reflect.Zero(v.Type().Elem())
@@ -543,7 +544,7 @@ func unstringifyMapKey(key string, keyType reflect.Type) (reflect.Value, error) 
 			}
 			return reflect.ValueOf(n).Convert(keyType), nil
 		default:
-			return reflect.Value{}, Errorf(InvalidArgument, nil, "invalid key type %s", keyType)
+			return reflect.Value{}, gcerr.Newf(gcerr.InvalidArgument, nil, "invalid key type %s", keyType)
 		}
 	}
 }
@@ -559,12 +560,12 @@ func decodeStruct(v reflect.Value, d Decoder) error {
 		}
 		f := fields.Match(key)
 		if f == nil {
-			err = Errorf(InvalidArgument, nil, "no field matching %q in %s", key, v.Type())
+			err = gcerr.Newf(gcerr.InvalidArgument, nil, "no field matching %q in %s", key, v.Type())
 			return false
 		}
 		fv, ok := fieldByIndexCreate(v, f.Index)
 		if !ok {
-			err = Errorf(InvalidArgument, nil,
+			err = gcerr.Newf(gcerr.InvalidArgument, nil,
 				"setting field %q in %s: cannot create embedded pointer field of unexported type",
 				key, v.Type())
 			return false
@@ -597,9 +598,16 @@ func fieldByIndexCreate(v reflect.Value, index []int) (reflect.Value, bool) {
 }
 
 func decodingError(v reflect.Value, d Decoder) error {
-	return Errorf(InvalidArgument, nil, "cannot set type %s to %s", v.Type(), d)
+	return gcerr.Newf(gcerr.InvalidArgument, nil, "cannot set type %s to %s", v.Type(), d)
 }
 
 func overflowError(x interface{}, t reflect.Type) error {
-	return Errorf(InvalidArgument, nil, "value %v overflows type %s", x, t)
+	return gcerr.Newf(gcerr.InvalidArgument, nil, "value %v overflows type %s", x, t)
+}
+
+func wrap(err error, code gcerr.ErrorCode) error {
+	if _, ok := err.(*gcerr.Error); !ok && err != nil {
+		err = gcerr.New(code, err, 2, err.Error())
+	}
+	return err
 }

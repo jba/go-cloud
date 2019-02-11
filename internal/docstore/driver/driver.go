@@ -19,13 +19,14 @@ package driver // import "gocloud.dev/internal/docstore/driver"
 import (
 	"context"
 
-	"github.com/google/uuid"
+	"gocloud.dev/internal/gcerr"
 )
 
 type Collection interface {
 	KeyFields() []string
 	RunActions(context.Context, []*Action) (int, error)
 	RunQuery(context.Context, *Query) error
+	ErrorCode(error) gcerr.ErrorCode
 }
 
 type ActionKind int
@@ -62,6 +63,3 @@ type Filter struct {
 	Op    string
 	Value interface{}
 }
-
-// Generate a string that is unique with high probability.
-func UniqueString() string { return uuid.New().String() }

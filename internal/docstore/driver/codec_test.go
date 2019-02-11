@@ -24,6 +24,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	tspb "github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/google/go-cmp/cmp"
+	"gocloud.dev/internal/gcerr"
 )
 
 type myString string
@@ -374,7 +375,7 @@ func TestDecodeErrors(t *testing.T) {
 	} {
 		dec := &testDecoder{test.val}
 		err := Decode(reflect.ValueOf(test.in).Elem(), dec)
-		if e, ok := err.(*Error); !ok || err == nil || e.Code != InvalidArgument {
+		if e, ok := err.(*gcerr.Error); !ok || err == nil || e.Code != gcerr.InvalidArgument {
 			t.Errorf("%s: got %v, want InvalidArgument Error", test.desc, err)
 			fmt.Printf("%+v\n", test.in)
 		}
