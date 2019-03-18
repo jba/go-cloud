@@ -20,14 +20,13 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"sync"
 
 	"gocloud.dev/gcerrors"
 	"gocloud.dev/internal/docstore"
 	"gocloud.dev/internal/docstore/driver"
 	"gocloud.dev/internal/gcerr"
 )
-
-// TODO(jba): make this package thread-safe.
 
 // Options sets options for constructing a *docstore.Collection backed by memory.
 type Options struct{}
@@ -52,6 +51,7 @@ func newCollection(keyField string) driver.Collection {
 
 type collection struct {
 	keyField string
+	mu       sync.Mutex
 	// map from keys to documents. Documents are represented as map[string]interface{},
 	// regardless of what their original representation is. Even if the user is using
 	// map[string]interface{}, we make our own copy.
@@ -87,6 +87,8 @@ func (c *collection) runAction(a *driver.Action) error {
 	if err != nil && !(gcerrors.Code(err) == gcerr.NotFound && a.Kind == driver.Create) {
 		return err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	// If there is a key, get the current document.
 	var (
 		current map[string]interface{}
@@ -155,6 +157,7 @@ func (c *collection) runAction(a *driver.Action) error {
 	return nil
 }
 
+// Must be called with the lock held.
 func (c *collection) update(doc map[string]interface{}, mods []driver.Mod) error {
 	// Apply each modification. Fail if any mod would fail.
 	// Sort mods by first field path element so tests are deterministic.
@@ -182,6 +185,7 @@ func (c *collection) update(doc map[string]interface{}, mods []driver.Mod) error
 	return nil
 }
 
+// Must be called with the lock held.
 func (c *collection) changeRevision(doc map[string]interface{}) {
 	c.nextRevision++
 	doc[docstore.RevisionField] = c.nextRevision
