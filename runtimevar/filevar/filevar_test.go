@@ -250,29 +250,32 @@ func TestOpenVariableURL(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		v, err := runtimevar.OpenVariable(ctx, test.URL)
-		if (err != nil) != test.WantErr {
-			t.Errorf("%s: got error %v, want error %v", test.URL, err, test.WantErr)
-		}
-		if err != nil {
-			continue
-		}
-		snapshot, err := v.Watch(ctx)
-		if (err != nil) != test.WantWatchErr {
-			t.Errorf("%s: got Watch error %v, want error %v", test.URL, err, test.WantWatchErr)
-		}
-		if err != nil {
-			continue
-		}
-		if !cmp.Equal(snapshot.Value, test.Want) {
-			t.Errorf("%s: got snapshot value\n%v\n  want\n%v", test.URL, snapshot.Value, test.Want)
-		}
+		t.Run(test.URL, func(t *testing.T) {
+			v, err := runtimevar.OpenVariable(ctx, test.URL)
+			if (err != nil) != test.WantErr {
+				t.Errorf("%s: got error %v, want error %v", test.URL, err, test.WantErr)
+			}
+			if err != nil {
+				return
+			}
+			defer v.Close()
+			snapshot, err := v.Watch(ctx)
+			if (err != nil) != test.WantWatchErr {
+				t.Errorf("%s: got Watch error %v, want error %v", test.URL, err, test.WantWatchErr)
+			}
+			if err != nil {
+				return
+			}
+			if !cmp.Equal(snapshot.Value, test.Want) {
+				t.Errorf("%s: got snapshot value\n%v\n  want\n%v", test.URL, snapshot.Value, test.Want)
+			}
+		})
 	}
 }
 
 func setupTestSecrets(ctx context.Context, dir, secretsPath string) (func(), error) {
 	const keeperEnv = "RUNTIMEVAR_KEEPER_URL"
-	const keeperURL = "stringkey://my-key"
+	const keeperURL = "base64key://smGbjm71Nxd1Ig5FS0wj9SlbzAIrnolCz9bQQ6uAhl4="
 	oldURL := os.Getenv(keeperEnv)
 	os.Setenv(keeperEnv, keeperURL)
 	cleanup := func() { os.Setenv(keeperEnv, oldURL) }

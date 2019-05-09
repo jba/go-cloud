@@ -22,18 +22,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	awscreds "github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/dnaeon/go-vcr/recorder"
 	"gocloud.dev/gcp"
-	"gocloud.dev/internal/testing/replay"
 	"gocloud.dev/internal/useragent"
 
 	"cloud.google.com/go/httpreplay"
+	"cloud.google.com/go/rpcreplay"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
@@ -52,35 +51,6 @@ func FakeGCPCredentials(ctx context.Context) (*google.Credentials, error) {
 	return google.CredentialsFromJSON(ctx, []byte(`{"type": "service_account", "project_id": "my-project-id"}`))
 }
 
-// NewAWSSession creates a new session for testing against AWS.
-// If the test is in --record mode, the test will call out to AWS, and the
-// results are recorded in a replay file.
-// Otherwise, the session reads a replay file and runs the test as a replay,
-// which never makes an outgoing HTTP call and uses fake credentials.
-func NewAWSSession(t *testing.T, region string) (sess *session.Session, rt http.RoundTripper, cleanup func()) {
-	mode := recorder.ModeReplaying
-	if *Record {
-		mode = recorder.ModeRecording
-	}
-	awsMatcher := &replay.ProviderMatcher{
-		URLScrubbers: []*regexp.Regexp{
-			regexp.MustCompile(`X-Amz-(Credential|Signature)=[^?]*`),
-		},
-		Headers: []string{"X-Amz-Target"},
-	}
-	r, cleanup, err := replay.NewRecorder(t, mode, awsMatcher, t.Name())
-	if err != nil {
-		t.Fatalf("unable to initialize recorder: %v", err)
-	}
-
-	client := &http.Client{Transport: r}
-	sess, err = awsSession(region, client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sess, r, cleanup
-}
-
 func awsSession(region string, client *http.Client) (*session.Session, error) {
 	// Provide fake creds if running in replay mode.
 	var creds *awscreds.Credentials
@@ -95,55 +65,78 @@ func awsSession(region string, client *http.Client) (*session.Session, error) {
 	})
 }
 
-// NewAWSSession2 is like NewAWSSession, but it uses a different record/replay proxy.
-func NewAWSSession2(ctx context.Context, t *testing.T, region string) (sess *session.Session, rt http.RoundTripper, cleanup func()) {
+// NewRecordReplayClient creates a new http.Client for tests. This client's
+// activity is being either recorded to files (when *Record is set) or replayed
+// from files. rf is a modifier function that will be invoked with the address
+// of the httpreplay.Recorder object used to obtain the client; this function
+// can mutate the recorder to add provider-specific header filters, for example.
+// An initState is returned for tests that need a state to have deterministic
+// results, for example, a seed to generate random sequences.
+func NewRecordReplayClient(ctx context.Context, t *testing.T, rf func(r *httpreplay.Recorder),
+	opts ...option.ClientOption) (c *http.Client, cleanup func(), initState int64) {
 	httpreplay.DebugHeaders()
 	path := filepath.Join("testdata", t.Name()+".replay")
 	if *Record {
 		t.Logf("Recording into golden file %s", path)
-	} else {
-		t.Logf("Replaying from golden file %s", path)
-	}
-	if *Record {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			t.Fatal(err)
 		}
-		rec, err := httpreplay.NewRecorder(path, nil)
+		state := time.Now()
+		b, _ := state.MarshalBinary()
+		rec, err := httpreplay.NewRecorder(path, b)
 		if err != nil {
 			t.Fatal(err)
 		}
-		rec.RemoveQueryParams("X-Amz-Credential", "X-Amz-Signature", "X-Amz-Security-Token")
-		rec.RemoveRequestHeaders("Authorization", "Duration", "X-Amz-Security-Token")
-		rec.ClearHeaders("X-Amz-Date")
-		rec.ClearQueryParams("X-Amz-Date")
-		rec.ClearHeaders("User-Agent") // AWS includes the Go version
-		c, err := rec.Client(ctx, option.WithoutAuthentication())
+		rf(rec)
+		c, err = rec.Client(ctx, opts...)
 		if err != nil {
 			t.Fatal(err)
 		}
-		rt = c.Transport
 		cleanup = func() {
 			if err := rec.Close(); err != nil {
 				t.Fatal(err)
 			}
 		}
-	} else { // replay
-		rep, err := httpreplay.NewReplayer(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		c, err := rep.Client(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rt = c.Transport
-		cleanup = func() { _ = rep.Close() } // Don't care about Close error on replay.
+
+		return c, cleanup, state.UnixNano()
 	}
-	sess, err := awsSession(region, &http.Client{Transport: rt})
+	t.Logf("Replaying from golden file %s", path)
+	rep, err := httpreplay.NewReplayer(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sess, rt, cleanup
+	c, err = rep.Client(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recState := new(time.Time)
+	if err := recState.UnmarshalBinary(rep.Initial()); err != nil {
+		t.Fatal(err)
+	}
+	return c, func() { rep.Close() }, recState.UnixNano()
+}
+
+// NewAWSSession creates a new session for testing against AWS.
+// If the test is in --record mode, the test will call out to AWS, and the
+// results are recorded in a replay file.
+// Otherwise, the session reads a replay file and runs the test as a replay,
+// which never makes an outgoing HTTP call and uses fake credentials.
+// An initState is returned for tests that need a state to have deterministic
+// results, for example, a seed to generate random sequences.
+func NewAWSSession(ctx context.Context, t *testing.T, region string) (sess *session.Session,
+	rt http.RoundTripper, cleanup func(), initState int64) {
+	client, cleanup, state := NewRecordReplayClient(ctx, t, func(r *httpreplay.Recorder) {
+		r.RemoveQueryParams("X-Amz-Credential", "X-Amz-Signature", "X-Amz-Security-Token")
+		r.RemoveRequestHeaders("Authorization", "Duration", "X-Amz-Security-Token")
+		r.ClearHeaders("X-Amz-Date")
+		r.ClearQueryParams("X-Amz-Date")
+		r.ClearHeaders("User-Agent") // AWS includes the Go version
+	}, option.WithoutAuthentication())
+	sess, err := awsSession(region, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sess, client.Transport, cleanup, state
 }
 
 // NewGCPClient creates a new HTTPClient for testing against GCP.
@@ -152,51 +145,22 @@ func NewAWSSession2(ctx context.Context, t *testing.T, region string) (sess *ses
 // Otherwise, the session reads a replay file and runs the test as a replay,
 // which never makes an outgoing HTTP call and uses fake credentials.
 func NewGCPClient(ctx context.Context, t *testing.T) (client *gcp.HTTPClient, rt http.RoundTripper, done func()) {
-	httpreplay.DebugHeaders()
-	path := filepath.Join("testdata", t.Name()+".replay")
-
+	var co option.ClientOption
 	if *Record {
-		t.Logf("Recording into golden file %s", path)
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			t.Fatal(err)
-		}
-		rec, err := httpreplay.NewRecorder(path, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rec.ClearQueryParams("Expires")
-		rec.ClearQueryParams("Signature")
-		rec.ClearHeaders("Expires")
-		rec.ClearHeaders("Signature")
 		creds, err := gcp.DefaultCredentials(ctx)
 		if err != nil {
 			t.Fatalf("failed to get default credentials: %v", err)
 		}
-		client, err := rec.Client(ctx, option.WithTokenSource(gcp.CredentialsTokenSource(creds)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		cleanup := func() {
-			if err := rec.Close(); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return &gcp.HTTPClient{Client: *client}, client.Transport, cleanup
+		co = option.WithTokenSource(gcp.CredentialsTokenSource(creds))
+	} else {
+		co = option.WithoutAuthentication()
 	}
-
-	// Replay.
-	t.Logf("Replaying from golden file %s", path)
-	replay, err := httpreplay.NewReplayer(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := replay.Client(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cleanup := func() {
-		_ = replay.Close()
-	}
+	c, cleanup, _ := NewRecordReplayClient(ctx, t, func(r *httpreplay.Recorder) {
+		r.ClearQueryParams("Expires")
+		r.ClearQueryParams("Signature")
+		r.ClearHeaders("Expires")
+		r.ClearHeaders("Signature")
+	}, co)
 	return &gcp.HTTPClient{Client: *c}, c.Transport, cleanup
 }
 
@@ -206,14 +170,9 @@ func NewGCPClient(ctx context.Context, t *testing.T) (client *gcp.HTTPClient, rt
 // Otherwise, the session reads a replay file and runs the test as a replay,
 // which never makes an outgoing RPC and uses fake credentials.
 func NewGCPgRPCConn(ctx context.Context, t *testing.T, endPoint, api string) (*grpc.ClientConn, func()) {
-	mode := recorder.ModeReplaying
-	if *Record {
-		mode = recorder.ModeRecording
-	}
-
-	opts, done := replay.NewGCPDialOptions(t, mode, t.Name()+".replay")
+	opts, done := NewGCPDialOptions(t, *Record, t.Name()+".replay")
 	opts = append(opts, useragent.GRPCDialOption(api))
-	if mode == recorder.ModeRecording {
+	if *Record {
 		// Add credentials for real RPCs.
 		creds, err := gcp.DefaultCredentials(ctx)
 		if err != nil {
@@ -276,44 +235,12 @@ func (f contentTypeInjector) New(node pipeline.Policy, opts *pipeline.PolicyOpti
 
 // NewAzureTestPipeline creates a new connection for testing against Azure Blob.
 func NewAzureTestPipeline(ctx context.Context, t *testing.T, api string, credential azblob.Credential, accountName string) (pipeline.Pipeline, func(), *http.Client) {
-	httpreplay.DebugHeaders()
-	path := filepath.Join("testdata", t.Name()+".replay")
-	var client *http.Client
-	var done func()
-	if *Record {
-		t.Logf("Recording into golden file %s", path)
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			t.Fatal(err)
-		}
-		rec, err := httpreplay.NewRecorder(path, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rec.RemoveQueryParams("se", "sig")
-		rec.RemoveQueryParams("X-Ms-Date")
-		rec.ClearHeaders("X-Ms-Date")
-		rec.ClearHeaders("User-Agent") // includes the full Go version
-		client, err = rec.Client(ctx, option.WithoutAuthentication())
-		if err != nil {
-			t.Fatal(err)
-		}
-		done = func() {
-			if err := rec.Close(); err != nil {
-				t.Fatal(err)
-			}
-		}
-	} else { // replay
-		t.Logf("Replaying from golden file %s", path)
-		rep, err := httpreplay.NewReplayer(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		client, err = rep.Client(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		done = func() { _ = rep.Close() } // Don't care about Close error on replay.
-	}
+	client, done, _ := NewRecordReplayClient(ctx, t, func(r *httpreplay.Recorder) {
+		r.RemoveQueryParams("se", "sig")
+		r.RemoveQueryParams("X-Ms-Date")
+		r.ClearHeaders("X-Ms-Date")
+		r.ClearHeaders("User-Agent") // includes the full Go version
+	}, option.WithoutAuthentication())
 	f := []pipeline.Factory{
 		// Sets User-Agent for recorder.
 		azblob.NewTelemetryPolicyFactory(azblob.TelemetryOptions{
@@ -339,20 +266,16 @@ func NewAzureTestPipeline(ctx context.Context, t *testing.T, api string, credent
 	return p, done, client
 }
 
-// NewAzureKeyVaultTestClient creates a *http.Client for Azure KeyVault test recordings.
-func NewAzureKeyVaultTestClient(ctx context.Context, t *testing.T) (func(), *http.Client) {
-	mode := recorder.ModeReplaying
-	if *Record {
-		mode = recorder.ModeRecording
-	}
-
-	azMatchers := &replay.ProviderMatcher{}
-	r, done, err := replay.NewRecorder(t, mode, azMatchers, t.Name())
-	if err != nil {
-		t.Fatalf("unable to initialize recorder: %v", err)
-	}
-
-	return done, &http.Client{Transport: r}
+// NewAzureKeyVaultTestClient creates a *http.Client for Azure KeyVault test
+// recordings.
+func NewAzureKeyVaultTestClient(ctx context.Context, t *testing.T) (*http.Client, func()) {
+	client, cleanup, _ := NewRecordReplayClient(ctx, t, func(r *httpreplay.Recorder) {
+		r.RemoveQueryParams("se", "sig")
+		r.RemoveQueryParams("X-Ms-Date")
+		r.ClearHeaders("X-Ms-Date")
+		r.ClearHeaders("User-Agent") // includes the full Go version
+	}, option.WithoutAuthentication())
+	return client, cleanup
 }
 
 // FakeGCPDefaultCredentials sets up the environment with fake GCP credentials.
@@ -373,4 +296,41 @@ func FakeGCPDefaultCredentials(t *testing.T) func() {
 		os.Remove(f.Name())
 		os.Setenv(envVar, oldEnvVal)
 	}
+}
+
+// NewGCPDialOptions return grpc.DialOptions that are to be appended to a GRPC
+// dial request. These options allow a recorder/replayer to intercept RPCs and
+// save RPCs to the file at filename, or read the RPCs from the file and return
+// them. When recording is set to true, we're in recording mode; otherwise we're
+// in replaying mode.
+func NewGCPDialOptions(t *testing.T, recording bool, filename string) (opts []grpc.DialOption, done func()) {
+	path := filepath.Join("testdata", filename)
+	if recording {
+		t.Logf("Recording into golden file %s", path)
+		r, err := rpcreplay.NewRecorder(path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts = r.DialOptions()
+		done = func() {
+			if err := r.Close(); err != nil {
+				t.Errorf("unable to close recorder: %v", err)
+			}
+		}
+		return opts, done
+	}
+	t.Logf("Replaying from golden file %s", path)
+	r, err := rpcreplay.NewReplayer(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Uncomment for more verbose logging from the replayer.
+	// r.SetLogFunc(t.Logf)
+	opts = r.DialOptions()
+	done = func() {
+		if err := r.Close(); err != nil {
+			t.Errorf("unable to close recorder: %v", err)
+		}
+	}
+	return opts, done
 }

@@ -23,51 +23,45 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.etcd.io/etcd/clientv3"
-	"go.etcd.io/etcd/embed"
 	"go.etcd.io/etcd/etcdserver/api/v3rpc/rpctypes"
 	"gocloud.dev/runtimevar"
 	"gocloud.dev/runtimevar/driver"
 	"gocloud.dev/runtimevar/drivertest"
 )
 
+// To run these tests against a local etcd server, first run ./localetcd.sh.
+// Then wait a few seconds for the server to be ready.
+
 var (
-	etcd    *embed.Etcd
-	etcdErr error
+	etcdClient *clientv3.Client
+	etcdError  error
 )
 
 func init() {
-	cfg := embed.NewConfig()
-	cfg.Dir = "default.etcd"
-	etcd, etcdErr = embed.StartEtcd(cfg)
-	if etcdErr != nil {
-		return
-	}
-	select {
-	case <-etcd.Server.ReadyNotify():
+	etcdClient, etcdError = clientv3.NewFromURL("http://localhost:2379")
+	if etcdError == nil {
+		// Check to see if the local etcd is actually running.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, etcdError = etcdClient.Put(ctx, "unused", "unused")
 	}
 }
 
-type harness struct {
-	client *clientv3.Client
-}
+type harness struct{}
 
 func newHarness(t *testing.T) (drivertest.Harness, error) {
-	if etcdErr != nil {
-		return nil, etcdErr
+	if etcdError != nil {
+		t.Skip("No local etcd server running, see runtimevar/etcdvar/localetcd.sh")
 	}
-	cli, err := clientv3.NewFromURL("http://localhost:2379")
-	if err != nil {
-		return nil, err
-	}
-	return &harness{client: cli}, nil
+	return &harness{}, nil
 }
 
 func (h *harness) MakeWatcher(ctx context.Context, name string, decoder *runtimevar.Decoder) (driver.Watcher, error) {
-	return newWatcher(h.client, name, decoder, nil), nil
+	return newWatcher(etcdClient, name, decoder, nil), nil
 }
 
 func (h *harness) CreateVariable(ctx context.Context, name string, val []byte) error {
-	_, err := h.client.Put(ctx, name, string(val))
+	_, err := etcdClient.Put(ctx, name, string(val))
 	return err
 }
 
@@ -76,15 +70,13 @@ func (h *harness) UpdateVariable(ctx context.Context, name string, val []byte) e
 }
 
 func (h *harness) DeleteVariable(ctx context.Context, name string) error {
-	_, err := h.client.Delete(ctx, name)
+	_, err := etcdClient.Delete(ctx, name)
 	return err
 }
 
 func (h *harness) Mutable() bool { return true }
 
-func (h *harness) Close() {
-	h.client.Close()
-}
+func (h *harness) Close() {}
 
 func TestConformance(t *testing.T) {
 	drivertest.RunConformanceTests(t, newHarness, []drivertest.AsTest{verifyAs{}})
@@ -149,6 +141,7 @@ func TestNoConnectionError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer v.Close()
 	// Watch will block for quite a while trying to connect,
 	// so use a short timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
@@ -195,22 +188,25 @@ func TestOpenVariable(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		v, err := runtimevar.OpenVariable(ctx, test.URL)
-		if (err != nil) != test.WantErr {
-			t.Errorf("%s: got error %v, want error %v", test.URL, err, test.WantErr)
-		}
-		if err != nil {
-			continue
-		}
-		snapshot, err := v.Watch(ctx)
-		if (err != nil) != test.WantWatchErr {
-			t.Errorf("%s: got Watch error %v, want error %v", test.URL, err, test.WantWatchErr)
-		}
-		if err != nil {
-			continue
-		}
-		if !cmp.Equal(snapshot.Value, test.Want) {
-			t.Errorf("%s: got snapshot value\n%v\n  want\n%v", test.URL, snapshot.Value, test.Want)
-		}
+		t.Run(test.URL, func(t *testing.T) {
+			v, err := runtimevar.OpenVariable(ctx, test.URL)
+			if (err != nil) != test.WantErr {
+				t.Errorf("%s: got error %v, want error %v", test.URL, err, test.WantErr)
+			}
+			if err != nil {
+				return
+			}
+			defer v.Close()
+			snapshot, err := v.Watch(ctx)
+			if (err != nil) != test.WantWatchErr {
+				t.Errorf("%s: got Watch error %v, want error %v", test.URL, err, test.WantWatchErr)
+			}
+			if err != nil {
+				return
+			}
+			if !cmp.Equal(snapshot.Value, test.Want) {
+				t.Errorf("%s: got snapshot value\n%v\n  want\n%v", test.URL, snapshot.Value, test.Want)
+			}
+		})
 	}
 }

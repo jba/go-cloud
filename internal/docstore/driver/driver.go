@@ -35,16 +35,17 @@ type Collection interface {
 	// the write. RunActions should return immediately after the first action that fails.
 	// The returned slice should have a single element.
 	//
-	// If unordered is true, the actions can be executed in any order, perhaps
-	// concurrently. All of the actions should be executed, even if some fail.
-	// The returned slice should have an element for each action that fails.
-	RunActions(ctx context.Context, actions []*Action, unordered bool) ActionListError
+	// opts controls the behavior of RunActions and is guaranteed to be non-nil.
+	RunActions(ctx context.Context, actions []*Action, opts *RunActionsOptions) ActionListError
 
 	// RunGetQuery executes a Query.
 	//
 	// Implementations can choose to execute the Query as one single request or
 	// multiple ones, depending on their service offerings.
 	RunGetQuery(context.Context, *Query) (DocumentIterator, error)
+
+	// RunDeleteQuery deletes every document matched by the query.
+	RunDeleteQuery(context.Context, *Query) error
 
 	// QueryPlan returns the plan for the query.
 	QueryPlan(*Query) (string, error)
@@ -92,6 +93,35 @@ type Mod struct {
 type ActionListError []struct {
 	Index int
 	Err   error
+}
+
+// NewActionListError creates an ActionListError from a slice of errors.
+// If the ith element err of the slice is non-nil, the resulting ActionListError
+// will have an item {i, err}.
+func NewActionListError(errs []error) ActionListError {
+	var alerr ActionListError
+	for i, err := range errs {
+		if err != nil {
+			alerr = append(alerr, struct {
+				Index int
+				Err   error
+			}{i, err})
+		}
+	}
+	return alerr
+}
+
+// RunActionsOptions controls the behavior of RunActions.
+type RunActionsOptions struct {
+	// Unordered let the actions be executed in any order, perhaps concurrently.
+	// All of the actions should be executed, even if some fail. The returned
+	// ActionListError should have an element for each action that fails.
+	Unordered bool
+
+	// BeforeDo is a callback that must be called exactly once before each one or
+	// group of the underlying provider's actions is executed. asFunc allows
+	// providers to expose provider-specific types.
+	BeforeDo func(asFunc func(interface{}) bool) error
 }
 
 // A Query defines a query operation to find documents within a collection based

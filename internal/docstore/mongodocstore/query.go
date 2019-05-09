@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -29,7 +28,7 @@ import (
 func (c *collection) RunGetQuery(ctx context.Context, q *driver.Query) (driver.DocumentIterator, error) {
 	opts := options.Find()
 	if len(q.FieldPaths) > 0 {
-		opts.Projection = projectionDoc(q.FieldPaths)
+		opts.Projection = c.projectionDoc(q.FieldPaths)
 	}
 	if q.Limit > 0 {
 		lim := int64(q.Limit)
@@ -37,7 +36,7 @@ func (c *collection) RunGetQuery(ctx context.Context, q *driver.Query) (driver.D
 	}
 	filter := bson.D{} // must be a zero-length slice, not nil
 	for _, f := range q.Filters {
-		bf, err := filterToBSON(f)
+		bf, err := c.filterToBSON(f)
 		if err != nil {
 			return nil, err
 		}
@@ -58,17 +57,30 @@ var mongoQueryOps = map[string]string{
 	"<=":           "$lte",
 }
 
+// filtersToBSON converts a []driver.Filter to the MongoDB equivalent, expressed
+// as a bson.D (list of key-value pairs).
+func (c *collection) filtersToBSON(fs []driver.Filter) (bson.D, error) {
+	filter := bson.D{} // must be a zero-length slice, not nil
+	for _, f := range fs {
+		bf, err := c.filterToBSON(f)
+		if err != nil {
+			return nil, err
+		}
+		filter = append(filter, bf)
+	}
+	return filter, nil
+}
+
 // filterToBSON converts a driver.Filter to the MongoDB equivalent, expressed
 // as a bson.E (key-value pair).
 // The MongoDB document corresponding to "field op value" is
 //   {field: {mop: value}}
 // where mop is the mongo version of op (see the mongoQueryOps map above).
-func filterToBSON(f driver.Filter) (bson.E, error) {
-	key := strings.Join(f.FieldPath, ".")
-	// Lowercase fields to match BSON lower-casing of struct encoding.
-	// This is INCORRECT. It is a temporary fix for #1899.
-	// TODO(jba): remove when we fix #1899.
-	key = strings.ToLower(key)
+func (c *collection) filterToBSON(f driver.Filter) (bson.E, error) {
+	key := c.toMongoFieldPath(f.FieldPath)
+	if c.idField != "" && key == c.idField {
+		key = mongoIDField
+	}
 	val, err := encodeValue(f.Value)
 	if err != nil {
 		return bson.E{}, err
@@ -87,17 +99,25 @@ type docIterator struct {
 }
 
 func (it *docIterator) Next(ctx context.Context, doc driver.Document) error {
+	m, err := it.nextMap(ctx)
+	if err != nil {
+		return err
+	}
+	return decodeDoc(m, doc, it.idField)
+}
+
+func (it *docIterator) nextMap(ctx context.Context) (map[string]interface{}, error) {
 	if !it.cursor.Next(ctx) {
 		if it.cursor.Err() != nil {
-			return it.cursor.Err()
+			return nil, it.cursor.Err()
 		}
-		return io.EOF
+		return nil, io.EOF
 	}
 	var m map[string]interface{}
 	if err := it.cursor.Decode(&m); err != nil {
-		return fmt.Errorf("cursor.Decode: %v", err)
+		return nil, fmt.Errorf("cursor.Decode: %v", err)
 	}
-	return decodeDoc(m, doc, it.idField)
+	return m, nil
 }
 
 func (it *docIterator) Stop() {
@@ -116,4 +136,13 @@ func (it *docIterator) As(i interface{}) bool {
 
 func (c *collection) QueryPlan(q *driver.Query) (string, error) {
 	return "unknown", nil
+}
+
+func (c *collection) RunDeleteQuery(ctx context.Context, q *driver.Query) error {
+	filter, err := c.filtersToBSON(q.Filters)
+	if err != nil {
+		return err
+	}
+	_, err = c.coll.DeleteMany(ctx, filter, nil)
+	return err
 }

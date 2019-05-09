@@ -25,12 +25,13 @@
 // https://cloud.google.com/docs/authentication/production.
 // To customize the URL opener, or for more details on the URL format,
 // see URLOpener.
-// See https://godoc.org/gocloud.dev#hdr-URLs for background information.
+// See https://gocloud.dev/concepts/urls/ for background information.
 //
 // As
 //
 // firedocstore exposes the following types for As:
 // - Collection.As: *firestore.Client
+// - ActionList.BeforeDo: *pb.BatchGetDocumentRequest or *pb.CommitRequest.
 // - Query.BeforeQuery: *firestore.RunQueryRequest
 // - DocumentIterator: firestore.Firestore_RunQueryClient
 package firedocstore
@@ -211,10 +212,14 @@ func newCollection(client *vkit.Client, projectID, collPath, nameField string, n
 }
 
 // RunActions implements driver.RunActions.
-func (c *collection) RunActions(ctx context.Context, actions []*driver.Action, unordered bool) driver.ActionListError {
-	if unordered {
-		panic("unordered unimplemented")
+func (c *collection) RunActions(ctx context.Context, actions []*driver.Action, opts *driver.RunActionsOptions) driver.ActionListError {
+	if opts.Unordered {
+		return c.runActionsUnordered(ctx, actions, opts)
 	}
+	return c.runActionsOrdered(ctx, actions, opts)
+}
+
+func (c *collection) runActionsOrdered(ctx context.Context, actions []*driver.Action, opts *driver.RunActionsOptions) driver.ActionListError {
 	// Split the actions into groups, each of which can be done with a single RPC.
 	// - Consecutive writes are grouped together.
 	// - Consecutive gets with the same field paths are grouped together.
@@ -226,10 +231,10 @@ func (c *collection) RunActions(ctx context.Context, actions []*driver.Action, u
 	var err error
 	for _, g := range groups {
 		if g[0].Kind == driver.Get {
-			n, err = c.runGets(ctx, g)
+			n, err = c.runGetsOrdered(ctx, g, opts)
 			nRun += n
 		} else {
-			err = c.runWrites(ctx, g)
+			err = c.runWrites(ctx, g, opts)
 			// Writes happen atomically: all or none.
 			if err != nil {
 				nRun += len(g)
@@ -255,62 +260,94 @@ func shouldSplit(cur, new *driver.Action) bool {
 }
 
 // Run a sequence of Get actions by calling the BatchGetDocuments RPC.
-// It returns the number of successful gets, as well as an error.
-func (c *collection) runGets(ctx context.Context, gets []*driver.Action) (int, error) {
-	req, err := c.newGetRequest(gets)
-	if err != nil {
-		return 0, err
-	}
-	streamClient, err := c.client.BatchGetDocuments(withResourceHeader(ctx, req.Database), req)
-	if err != nil {
-		return 0, err
-	}
-	// BatchGetDocuments is a streaming RPC.
-	// Read the stream and organize by path, since results may arrive out of order.
-	resps := map[string]*pb.BatchGetDocumentsResponse{}
-	for {
-		resp, err := streamClient.Recv()
-		if err == io.EOF {
-			break
-		}
+// It returns the number of initial successful gets, as well as an error.
+func (c *collection) runGetsOrdered(ctx context.Context, gets []*driver.Action, opts *driver.RunActionsOptions) (int, error) {
+	errs := c.runGets(ctx, gets, opts)
+	for i, err := range errs {
 		if err != nil {
-			return 0, err
-		}
-		switch r := resp.Result.(type) {
-		case *pb.BatchGetDocumentsResponse_Found:
-			resps[r.Found.Name] = resp
-		case *pb.BatchGetDocumentsResponse_Missing:
-			resps[r.Missing] = nil
-		default:
-			return 0, gcerr.Newf(gcerr.Internal, nil, "unknown BatchGetDocumentsResponse result type")
-		}
-	}
-	// Now process the result for each input document.
-	for i, path := range req.Documents {
-		resp, ok := resps[path]
-		if !ok {
-			return i, gcerr.Newf(gcerr.Internal, nil, "no BatchGetDocumentsResponse for %q", path)
-		}
-		if resp == nil {
-			return i, gcerr.Newf(gcerr.NotFound, nil, "document at path %q is missing", path)
-		}
-		pdoc := resp.Result.(*pb.BatchGetDocumentsResponse_Found).Found
-		// TODO(jba): support field paths in decoding.
-		if err := decodeDoc(pdoc, gets[i].Doc, c.nameField); err != nil {
 			return i, err
 		}
 	}
 	return len(gets), nil
 }
 
+// runGets executes a group of Get actions by calling the BatchGetDocuments RPC.
+// It returns the error for each Get action in order.
+func (c *collection) runGets(ctx context.Context, gets []*driver.Action, opts *driver.RunActionsOptions) []error {
+	errs := make([]error, len(gets))
+	setErr := func(err error) {
+		for i := range errs {
+			errs[i] = err
+		}
+	}
+
+	req, err := c.newGetRequest(gets)
+	if err != nil {
+		setErr(err)
+		return errs
+	}
+
+	indexByPath := map[string]int{} // from document path to index in gets slice
+	for i, path := range req.Documents {
+		indexByPath[path] = i
+	}
+	if opts.BeforeDo != nil {
+		asFunc := func(i interface{}) bool {
+			p, ok := i.(**pb.BatchGetDocumentsRequest)
+			if !ok {
+				return false
+			}
+			*p = req
+			return true
+		}
+		if err := opts.BeforeDo(asFunc); err != nil {
+			setErr(err)
+			return errs
+		}
+	}
+	streamClient, err := c.client.BatchGetDocuments(withResourceHeader(ctx, req.Database), req)
+	if err != nil {
+		setErr(err)
+		return errs
+	}
+	for {
+		resp, err := streamClient.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			setErr(err)
+			return errs
+		}
+		switch r := resp.Result.(type) {
+		case *pb.BatchGetDocumentsResponse_Found:
+			pdoc := r.Found
+			i := indexByPath[pdoc.Name]
+			errs[i] = decodeDoc(pdoc, gets[i].Doc, c.nameField)
+		case *pb.BatchGetDocumentsResponse_Missing:
+			i := indexByPath[r.Missing]
+			errs[i] = gcerr.Newf(gcerr.NotFound, nil, "document at path %q is missing", r.Missing)
+		default:
+			setErr(gcerr.Newf(gcerr.Internal, nil, "unknown BatchGetDocumentsResponse result type"))
+			return errs
+		}
+	}
+	return errs
+}
+
 func (c *collection) newGetRequest(gets []*driver.Action) (*pb.BatchGetDocumentsRequest, error) {
 	req := &pb.BatchGetDocumentsRequest{Database: c.dbPath}
+	seen := map[string]bool{}
 	for _, a := range gets {
 		docName, _, err := c.docName(a.Doc)
 		if err != nil {
 			return nil, err
 		}
+		if seen[docName] {
+			return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "duplicate document name in Get: %q", docName)
+		}
 		req.Documents = append(req.Documents, c.collPath+"/"+docName)
+		seen[docName] = true
 	}
 	// groupActions has already made sure that all the actions have the same field paths,
 	// so just use the first one.
@@ -326,7 +363,7 @@ func (c *collection) newGetRequest(gets []*driver.Action) (*pb.BatchGetDocuments
 
 // runWrites executes all the actions in a single RPC. The actions are done atomically,
 // so either they all succeed or they all fail.
-func (c *collection) runWrites(ctx context.Context, actions []*driver.Action) error {
+func (c *collection) runWrites(ctx context.Context, actions []*driver.Action, opts *driver.RunActionsOptions) error {
 	// Convert each action to one or more writes, collecting names for newly created
 	// documents along the way.
 	var pws []*pb.Write
@@ -340,7 +377,7 @@ func (c *collection) runWrites(ctx context.Context, actions []*driver.Action) er
 		pws = append(pws, ws...)
 	}
 	// Call the Commit RPC with the list of writes.
-	wrs, err := c.commit(ctx, pws)
+	wrs, err := c.commit(ctx, pws, opts)
 	if err != nil {
 		return err
 	}
@@ -487,6 +524,38 @@ func (c *collection) updateWrites(doc driver.Document, docName string, mods []dr
 	return []*pb.Write{w}, nil
 }
 
+func (c *collection) runActionsUnordered(ctx context.Context, actions []*driver.Action, opts *driver.RunActionsOptions) driver.ActionListError {
+	// Split into groups the same way, but run them concurrently.
+	// TODO(jba): group without considering order.
+	groups := driver.SplitActions(actions, shouldSplit)
+	errs := make([]error, len(actions))
+	var wg sync.WaitGroup
+	groupBaseIndex := 0 // index in actions of first action in group
+	for _, g := range groups {
+		g := g
+		base := groupBaseIndex
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if g[0].Kind == driver.Get {
+				errs := c.runGets(ctx, g, opts)
+				for i, err := range errs {
+					errs[base+i] = err
+				}
+			} else {
+				err := c.runWrites(ctx, g, opts)
+				// Writes run in a transaction, so there is a single error for the group.
+				for i := 0; i < len(g); i++ {
+					errs[base+i] = err
+				}
+			}
+		}()
+		groupBaseIndex += len(g)
+	}
+	wg.Wait()
+	return driver.NewActionListError(errs)
+}
+
 ////////////////
 // From memdocstore/mem.go.
 
@@ -585,10 +654,23 @@ func revisionPrecondition(doc driver.Document) (*pb.Precondition, error) {
 // - At most one `transform` per document is allowed in a given request.
 // - An `update` cannot follow a `transform` on the same document in a given request.
 // These should actually happen in groupActions.
-func (c *collection) commit(ctx context.Context, ws []*pb.Write) ([]*pb.WriteResult, error) {
+func (c *collection) commit(ctx context.Context, ws []*pb.Write, opts *driver.RunActionsOptions) ([]*pb.WriteResult, error) {
 	req := &pb.CommitRequest{
 		Database: c.dbPath,
 		Writes:   ws,
+	}
+	if opts.BeforeDo != nil {
+		asFunc := func(i interface{}) bool {
+			p, ok := i.(**pb.CommitRequest)
+			if !ok {
+				return false
+			}
+			*p = req
+			return true
+		}
+		if err := opts.BeforeDo(asFunc); err != nil {
+			return nil, err
+		}
 	}
 	res, err := c.client.Commit(withResourceHeader(ctx, req.Database), req)
 	if err != nil {
