@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // Issues:
-// - requires a revision to delete or replace
+// - CouchDB requires a revision to delete or replace. Docstore doesn't insist on one.
+// - Any nontrivial query requires a javascript "view" to be written and installed.
 
 package couchdocstore
 
