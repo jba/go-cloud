@@ -132,8 +132,8 @@ func (*encryptCmd) Usage() string {
 }
 
 func (cmd *encryptCmd) SetFlags(f *flag.FlagSet) {
-	f.BoolVar(&cmd.base64in, "base64in", false, "the plaintext is base64 encoded")
-	f.BoolVar(&cmd.base64out, "base64out", true, "the resulting ciphertext should be base64 encoded before printing it out")
+	f.BoolVar(&cmd.base64in, "base64in", false, "the plaintext is base64-encoded")
+	f.BoolVar(&cmd.base64out, "base64out", true, "the resulting ciphertext should be base64-encoded before printing it out")
 }
 
 func (cmd *encryptCmd) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {

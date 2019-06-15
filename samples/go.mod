@@ -10,6 +10,7 @@ require (
 	github.com/google/uuid v1.1.1
 	github.com/google/wire v0.3.0
 	github.com/gorilla/mux v1.7.2
+	github.com/streadway/amqp v0.0.0-20190404075320-75d898a42a94
 	go.opencensus.io v0.22.0
 	gocloud.dev v0.15.0
 	gocloud.dev/docstore/mongodocstore v0.0.0-00010101000000-000000000000
@@ -20,6 +21,7 @@ require (
 	gocloud.dev/secrets/vault v0.15.0
 	google.golang.org/genproto v0.0.0-20190605220351-eb0b1bdb6ae6
 	gopkg.in/pipe.v2 v2.0.0-20140414041502-3c2ca4d52544
+	pack.ag/amqp v0.11.0
 )
 
 replace gocloud.dev => ../

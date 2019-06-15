@@ -1,0 +1,12 @@
+# This file has incorrect output.
+
+$ echo hello world
+not hello world
+
+$ echo now
+$ echo is
+$ echo the time
+now
+isn't
+the time
+

@@ -1,0 +1,34 @@
+$ cd foo --> FAIL
+
+$ echo hello world
+hello world
+
+$ echo now
+$ echo is
+$ echo the time
+now
+is
+the time
+
+$ mkdir foo
+$ cd foo
+$ echo the ${ROOTDIR} is what it is
+the ${ROOTDIR} is what it is
+
+$ echof bar line one
+$ cat bar
+line one
+
+$ echof bar line two
+$ cat bar
+line two
+
+# TODO(jba): test input redirection os-independently
+
+$ /bin/cat < bar
+line two
+
+$ setenv foo bar
+$ echo foo equals "${foo}"
+foo equals "bar"
+

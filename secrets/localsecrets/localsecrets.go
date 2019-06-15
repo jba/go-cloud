@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package localsecrets provides a secrets implementation using a locally
-// locally provided symmetric key.
+// provided symmetric key.
 // Use NewKeeper to construct a *secrets.Keeper.
 //
 // URLs
@@ -49,9 +49,7 @@ func init() {
 // Scheme is the URL scheme localsecrets registers its URLOpener under on
 // secrets.DefaultMux.
 // See the package documentation and/or URLOpener for details.
-const (
-	Scheme = "base64key"
-)
+const Scheme = "base64key"
 
 // URLOpener opens localsecrets URLs like "base64key://smGbjm71Nxd1Ig5FS0wj9SlbzAIrnolCz9bQQ6uAhl4=".
 //

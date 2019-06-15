@@ -106,6 +106,9 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 		return nil, fmt.Errorf("open topic %v: invalid query parameter %q", u, param)
 	}
 	exchangeName := path.Join(u.Host, u.Path)
+	if exchangeName == "" {
+		return nil, fmt.Errorf("open topic %q: empty topic name", u)
+	}
 	return OpenTopic(o.Connection, exchangeName, &o.TopicOptions), nil
 }
 
