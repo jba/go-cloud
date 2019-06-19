@@ -23,12 +23,9 @@ $ echof bar line two
 $ cat bar
 line two
 
-# TODO(jba): test input redirection os-independently
-
-$ /bin/cat < bar
-line two
-
 $ setenv foo bar
 $ echo foo equals "${foo}"
 foo equals "bar"
+
+# TODO(jba): test input redirection os-independently
 

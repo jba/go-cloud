@@ -40,6 +40,7 @@ import (
 // commands to execute. See below for the valid commands.
 //
 // Lines following the '$' lines are command output (merged stdout and stderr).
+// Output is always treated literally.
 // After the command output there should be a blank line. Between that blank line
 // and the next '$' line, empty lines and lines beginning with '#' are ignored.
 // (Because of these rules, cmdtest cannot distinguish trailing blanks in the output.)
@@ -66,6 +67,8 @@ type TestFile struct {
 	// If true, don't delete the test's temporary root directory, and print it out
 	// its name for debugging.
 	KeepRootDir bool
+
+	Setup func() error
 
 	// Special commands that are not executed via exec.Command (like shell
 	// built-ins).
@@ -119,7 +122,7 @@ func ReadTestFile(filename string) (*TestFile, error) {
 	state := beforeFirstCommand
 	for scanner.Scan() {
 		lineno++
-		line := strings.TrimSpace(scanner.Text())
+		line := scanner.Text()
 		isCommand := strings.HasPrefix(line, "$")
 		switch state {
 		case beforeFirstCommand:
@@ -127,10 +130,13 @@ func ReadTestFile(filename string) (*TestFile, error) {
 				tc = &TestCase{startLine: lineno, before: prefix}
 				tc.addCommandLine(line)
 				state = inCommands
-			} else if line == "" || line[0] == '#' {
-				prefix = append(prefix, line)
 			} else {
-				return nil, fmt.Errorf("%s:%d: bad line %q (should begin with '#')", filename, lineno, line)
+				line = strings.TrimSpace(line)
+				if line == "" || line[0] == '#' {
+					prefix = append(prefix, line)
+				} else {
+					return nil, fmt.Errorf("%s:%d: bad line %q (should begin with '#')", filename, lineno, line)
+				}
 			}
 
 		case inCommands:
@@ -272,11 +278,11 @@ func (tf *TestFile) run() error {
 	}
 	defer func() { _ = os.Chdir(cwd) }()
 
-	// if tf.Setup != nil {
-	// 	if err := tf.Setup(); err != nil {
-	// 		return fmt.Errorf("%s: calling Setup: %v", tf.filename, err)
-	// 	}
-	// }
+	if tf.Setup != nil {
+		if err := tf.Setup(); err != nil {
+			return fmt.Errorf("%s: calling Setup: %v", tf.filename, err)
+		}
+	}
 
 	for _, tc := range tf.cases {
 		if err := tc.run(tf, rootDir, tf.Verbose); err != nil {
