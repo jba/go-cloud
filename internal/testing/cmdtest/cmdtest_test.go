@@ -17,16 +17,37 @@ package cmdtest
 import (
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestReadTestFile(t *testing.T) {
-	got, err := ReadTestFile("testdata/read.ct")
+func TestMain(m *testing.M) {
+	// Build the little program needed to test input redirection.
+	if err := exec.Command("go", "build", "testdata/echo-stdin.go").Run(); err != nil {
+		log.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Set PATH to the current directory so test files can find echo-stdin.
+	os.Setenv("PATH", cwd)
+
+	ret := m.Run()
+
+	os.Remove(filepath.Join(cwd, "echo-stdin"))
+
+	os.Exit(ret)
+}
+
+func TestRead(t *testing.T) {
+	got, err := Read("testdata/read.ct")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,18 +85,6 @@ func TestReadTestFile(t *testing.T) {
 		t.Error(diff)
 	}
 
-}
-
-func TestRun(t *testing.T) {
-	if err := exec.Command("go", "build", "testdata/echo-stdin.go").Run(); err != nil {
-		t.Fatal(err)
-	}
-
-	setPath(t)
-	tf := mustReadTestFile(t, "good")
-	if err := tf.run(); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestCompare(t *testing.T) {
@@ -159,7 +168,6 @@ func TestExpand(t *testing.T) {
 }
 
 func TestUpdateToTemp(t *testing.T) {
-	setPath(t)
 	tf := mustReadTestFile(t, "good")
 	fname, err := tf.updateToTemp()
 	if err != nil {
@@ -196,17 +204,9 @@ func diffFiles(t *testing.T, gotFile, wantFile string) string {
 
 func mustReadTestFile(t *testing.T, basename string) *TestFile {
 	t.Helper()
-	tf, err := ReadTestFile("testdata/" + basename + ".ct")
+	tf, err := Read("testdata/" + basename + ".ct")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return tf
-}
-
-func setPath(t *testing.T) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Setenv("PATH", cwd)
 }

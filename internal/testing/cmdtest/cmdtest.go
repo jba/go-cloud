@@ -12,6 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// The cmdtest package simplifies testing of command-line interfaces.
+// It provides a simple, cross-platform shell-like language to express
+// command executions, and will compare actual output with the expected
+// output in the file. It can also update a file with new "golden" output.
+//
+// Write a test file with commands and expected output. See the TestFile
+// documentation for the syntax.
+//
+// To test, first read the file:
+//
+//    tf, err := cmdtest.Read("test.ct")
+//
+// Then configure the resulting TestFile by adding commands or enabling
+// debugging features. Lastly, call TestFile.Compare:
+//
+//    diff := tf.Compare()
+//
+// The string returned by Compare will be non-empty if there were any
+// errors or differences in output.
+//
+// After confirming that the output differences are intentional, you can
+// update the original file by calling TestFile.Update:
+//
+//    err := tf.Update()
 package cmdtest
 
 import (
@@ -36,20 +60,21 @@ import (
 // Before the first line starting with a '$', empty lines and lines beginning with
 // "#" are ignored.
 //
-// A sequence of consecutive lines starting with '$' begin test case. These lines are
-// commands to execute. See below for the valid commands.
+// A sequence of consecutive lines starting with '$' begin a test case. These lines
+// are commands to execute. See below for the valid commands.
 //
 // Lines following the '$' lines are command output (merged stdout and stderr).
-// Output is always treated literally.
-// After the command output there should be a blank line. Between that blank line
-// and the next '$' line, empty lines and lines beginning with '#' are ignored.
-// (Because of these rules, cmdtest cannot distinguish trailing blanks in the output.)
+// Output is always treated literally. After the command output there should be a
+// blank line. Between that blank line and the next '$' line, empty lines and lines
+// beginning with '#' are ignored. (Because of these rules, cmdtest cannot
+// distinguish trailing blank lines in the output.)
 //
 // Syntax of a line beginning with '$':
 // A sequence of space-separated words (no quoting is supported). The first word is
 // the command, the rest are its args. If the next-to-last word is '<', the last word
-// is interpreted as a file and becomes the standard input to the command (only for
-// commands run with exec.Command).
+// is interpreted as a file and becomes the standard input to the command. This input
+// redirection is only supported for commands run with exec.Command, not those in the
+// Commands map.
 //
 // By default, commands are expected to succeed, and the test will fail
 // otherwise. However, commands that are expected to fail can be marked
@@ -57,21 +82,39 @@ import (
 //
 // The cases of a test file are executed in order, starting from a freshly created temporary
 // directory.
+//
+// The built-in commands (initial contents of the Commands map) are:
+//
+//   cd DIR
+//   cat FILE
+//   mkdir DIR
+//   setenv VAR VALUE
+//   echo ARG1 ARG2 ...
+//   echof FILE ARG1 ARG2 ...
+//
+// These all have their usual Unix shell meaning, except for echof, which writes its
+// arguments to a file (output redirection is not supported). All file and directory
+// arguments must refer to the current directory; that is, they cannot contain
+// slashes.
+//
+// Environment variable substitution is supported, using the syntax "${VAR}".
+// The environment variable ROOTDIR is set to the temporary directory created to run
+// the test file.
 type TestFile struct {
-	// Echo each command and its output as it's run
-	Verbose bool
-
 	// If non-nil, this function is called with the root directory after it has been made
 	// the current directory.
 	Setup func(string) error
 
-	// If true, don't delete the test's temporary root directory, and print it out
-	// its name for debugging.
-	KeepRootDir bool
-
 	// Special commands that are not executed via exec.Command (like shell
 	// built-ins).
 	Commands map[string]func(args []string) ([]byte, error)
+
+	// Echo each command and its output as it's run
+	Verbose bool
+
+	// If true, don't delete the test's temporary root directory, and print it out
+	// its name for debugging.
+	KeepRootDir bool
 
 	filename string // full filename of the test file
 	cases    []*TestCase
@@ -89,7 +132,9 @@ type TestCase struct {
 	wantOutput []string // from file
 }
 
-func ReadTestFile(filename string) (*TestFile, error) {
+// Read reads filename and parses it as a TestFile. See the TestFile documentation
+// for syntax.
+func Read(filename string) (*TestFile, error) {
 	// parse states
 	const (
 		beforeFirstCommand = iota
@@ -192,6 +237,9 @@ func (tf *TestFile) addCase(tc *TestCase) []string {
 	return suffix
 }
 
+// Compare runs the commands in the test file and compares their output with the
+// output in the file. The comparison is done line by line. Before comparing,
+// occurrences of the root directory in the output are replaced by ${ROOTDIR}.
 func (tf *TestFile) Compare() string {
 	if err := tf.run(); err != nil {
 		return err.Error()
@@ -211,6 +259,9 @@ func (tf *TestFile) Compare() string {
 	return s
 }
 
+// Update runs the commands in the test file and writes their output back to the
+// file, overwriting the previous output. Occurrences of the root directory in the
+// output are replaced by ${ROOTDIR}.
 func (tf *TestFile) Update() error {
 	tmpfilename, err := tf.updateToTemp()
 	if err != nil {
@@ -358,6 +409,9 @@ func (tc *TestCase) run(tf *TestFile, rootDir string, verbose bool) error {
 	return nil
 }
 
+// execute uses exec.Command to run the named program with the given args. The
+// combined output is captured and returned. If infile is not empty, its contents
+// become the command's standard input.
 func execute(name string, args []string, infile string) ([]byte, error) {
 	ecmd := exec.Command(name, args...)
 	var errc chan error
