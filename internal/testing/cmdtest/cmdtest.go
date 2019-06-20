@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-// TODO: test update
-// TODO: test input redirection
-
 package cmdtest
 
 import (
@@ -244,13 +240,7 @@ func (tf *TestFile) updateToTemp() (fname string, err error) {
 			err = err2
 		}
 	}()
-
-	for _, c := range tf.cases {
-		if err := c.write(w); err != nil {
-			return "", err
-		}
-	}
-	if err := writeLines(w, tf.suffix); err != nil {
+	if err := tf.write(w); err != nil {
 		return "", err
 	}
 	return f.Name(), nil
@@ -296,8 +286,13 @@ func (tf *TestFile) run() error {
 	return nil
 }
 
+// A fatal error stops a test.
 type fatal struct{ error }
 
+// Run the test case by executing the commands. The concatenated output from all commands
+// is saved in tc.gotOutput.
+// An error is returned if: a command that should succeed instead failed; a command that should
+// fail instead succeeded; or if a built-in command was called incorrectly.
 func (tc *TestCase) run(tf *TestFile, rootDir string, verbose bool) error {
 	const failMarker = " --> FAIL"
 
@@ -312,7 +307,7 @@ func (tc *TestCase) run(tf *TestFile, rootDir string, verbose bool) error {
 		}
 		args := strings.Fields(cmd)
 		for i := range args {
-			args[i], err = expand(args[i], os.LookupEnv)
+			args[i], err = expandVariables(args[i], os.LookupEnv)
 			if err != nil {
 				return err
 			}
@@ -397,7 +392,12 @@ func execute(name string, args []string, infile string) ([]byte, error) {
 
 var varRegexp = regexp.MustCompile(`\$\{([^${}]+)\}`)
 
-func expand(s string, lookup func(string) (string, bool)) (string, error) {
+// expandVariables replaces variable references in s with their values. A reference
+// to a variable V looks like "${V}".
+// lookup is called on a variable's name to find its value. Its second return value
+// is false if the variable doesn't exist.
+// expandVariables fails if s contains a reference to a non-existent variable.
+func expandVariables(s string, lookup func(string) (string, bool)) (string, error) {
 	var sb strings.Builder
 	for {
 		ixs := varRegexp.FindStringSubmatchIndex(s)
@@ -416,7 +416,7 @@ func expand(s string, lookup func(string) (string, bool)) (string, error) {
 	}
 }
 
-// scrub removes dynamic content from recorded files.
+// scrub removes dynamic content from output.
 func scrub(rootDir string, b []byte) []byte {
 	const scrubbedRootDir = "${ROOTDIR}"
 	rootDirWithSeparator := rootDir + string(filepath.Separator)
@@ -424,6 +424,15 @@ func scrub(rootDir string, b []byte) []byte {
 	b = bytes.Replace(b, []byte(rootDirWithSeparator), []byte(scrubbedRootDirWithSeparator), -1)
 	b = bytes.Replace(b, []byte(rootDir), []byte(scrubbedRootDir), -1)
 	return b
+}
+
+func (tf *TestFile) write(w io.Writer) error {
+	for _, c := range tf.cases {
+		if err := c.write(w); err != nil {
+			return err
+		}
+	}
+	return writeLines(w, tf.suffix)
 }
 
 func (tc *TestCase) write(w io.Writer) error {
@@ -458,6 +467,8 @@ func writeLines(w io.Writer, lines []string) error {
 	return nil
 }
 
+// cd DIR
+// change directory
 func cdCmd(args []string) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fatal{errors.New("need exactly 1 argument")}
@@ -471,10 +482,15 @@ func cdCmd(args []string) ([]byte, error) {
 	}
 	return nil, os.Chdir(filepath.Join(cwd, args[0]))
 }
+
+// echo ARG1 ARG2 ...
+// write args to stdout
 func echoCmd(args []string) ([]byte, error) {
 	return []byte(strings.Join(args, " ") + "\n"), nil
 }
 
+// echof FILE ARG1 ARG2 ...
+// write args to FILE
 func echofCmd(args []string) ([]byte, error) {
 	if len(args) < 1 {
 		return nil, fatal{errors.New("need at least 1 argument")}
@@ -485,6 +501,8 @@ func echofCmd(args []string) ([]byte, error) {
 	return nil, ioutil.WriteFile(args[0], []byte(strings.Join(args[1:], " ")+"\n"), 0600)
 }
 
+// cat FILE
+// copy file to stdout
 func catCmd(args []string) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fatal{errors.New("need exactly 1 argument")}
@@ -505,6 +523,8 @@ func catCmd(args []string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// mkdir DIR
+// create directory
 func mkdirCmd(args []string) ([]byte, error) {
 	if len(args) != 1 {
 		return nil, fatal{errors.New("need exactly 1 argument")}
@@ -515,6 +535,8 @@ func mkdirCmd(args []string) ([]byte, error) {
 	return nil, os.Mkdir(args[0], 0700)
 }
 
+// setenv VAR VALUE
+// set environment variable
 func setenvCmd(args []string) ([]byte, error) {
 	if len(args) != 2 {
 		return nil, fatal{errors.New("need exactly 2 arguments")}

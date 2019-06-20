@@ -15,8 +15,11 @@
 package cmdtest
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -64,21 +67,58 @@ func TestReadTestFile(t *testing.T) {
 }
 
 func TestRun(t *testing.T) {
-	tf := mustReadTestFile(t, "run-1")
+	if err := exec.Command("go", "build", "testdata/echo-stdin.go").Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	setPath(t)
+	tf := mustReadTestFile(t, "good")
 	if err := tf.run(); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestCompare(t *testing.T) {
-	tf := mustReadTestFile(t, "run-1")
+	tf := mustReadTestFile(t, "good")
 	if diff := tf.Compare(); diff != "" {
 		t.Errorf("got\n%s\nwant empty", diff)
 	}
 
-	tf = mustReadTestFile(t, "run-2")
-	if diff := tf.Compare(); diff == "" {
-		t.Error("got no diff, want diff")
+	// Test errors.
+	// Since the output of cmp.Diff is unstable, we search for strings we expect
+	// to find there, rather than checking an exact match.
+	for _, test := range []struct {
+		file  string
+		wants []string // substrings that should be present
+	}{
+		{
+			"bad-output",
+			[]string{
+				"testdata/bad-output.ct:2: got=-, want=+",
+				"testdata/bad-output.ct:6: got=-, want=+",
+			},
+		},
+		{
+			"bad-fail-1",
+			[]string{`testdata/bad-fail-1.ct:2: "echo" succeeded, but it was expected to fail`},
+		},
+		{
+			"bad-fail-2",
+			[]string{`testdata/bad-fail-2.ct:2: "cd foo" failed`},
+		},
+	} {
+		tf := mustReadTestFile(t, test.file)
+		got := tf.Compare()
+		failed := false
+		for _, w := range test.wants {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: output does not contain %q", test.file, w)
+				failed = true
+			}
+		}
+		if failed {
+			t.Logf("output of %s:\n%s", test.file, got)
+		}
 	}
 }
 
@@ -102,7 +142,7 @@ func TestExpand(t *testing.T) {
 		{" x${A}y  ${B_C}z ", " x1y  234z "},
 		{" ${A${B_C}", " ${A234"},
 	} {
-		got, err := expand(test.in, lookup)
+		got, err := expandVariables(test.in, lookup)
 		if err != nil {
 			t.Errorf("%q: %v", test.in, err)
 			continue
@@ -113,29 +153,45 @@ func TestExpand(t *testing.T) {
 	}
 
 	// Unknown variable is an error.
-	if _, err := expand("x${C}y", lookup); err == nil {
+	if _, err := expandVariables("x${C}y", lookup); err == nil {
 		t.Error("got nil, want error")
 	}
 }
 
 func TestUpdateToTemp(t *testing.T) {
-	tf := mustReadTestFile(t, "run-1")
+	setPath(t)
+	tf := mustReadTestFile(t, "good")
 	fname, err := tf.updateToTemp()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(fname)
-	want, err := ioutil.ReadFile("testdata/run-1.ct")
+	if diff := diffFiles(t, "testdata/good.ct", fname); diff != "" {
+		t.Errorf("good.ct: %s", diff)
+	}
+
+	tf = mustReadTestFile(t, "good-without-output")
+	fname, err = tf.updateToTemp()
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := ioutil.ReadFile(fname)
+	//defer os.Remove(fname)
+	if diff := diffFiles(t, "testdata/good.ct", fname); diff != "" {
+		fmt.Println(fname)
+		t.Errorf("good-without-output.ct: %s", diff)
+	}
+}
+
+func diffFiles(t *testing.T, gotFile, wantFile string) string {
+	got, err := ioutil.ReadFile(gotFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff := cmp.Diff(string(got), string(want)); diff != "" {
-		t.Error(diff)
+	want, err := ioutil.ReadFile(wantFile)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return cmp.Diff(string(got), string(want))
 }
 
 func mustReadTestFile(t *testing.T, basename string) *TestFile {
@@ -145,4 +201,12 @@ func mustReadTestFile(t *testing.T, basename string) *TestFile {
 		t.Fatal(err)
 	}
 	return tf
+}
+
+func setPath(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Setenv("PATH", cwd)
 }
