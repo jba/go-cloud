@@ -130,6 +130,7 @@ func TestCLI(t *testing.T) {
 			tf.Setup = func(rootDir string) error {
 				return os.Setenv("GOPATH", filepath.Dir(rootDir))
 			}
+			// "ls": list files, in platform-independent order.
 			tf.Commands["ls"] = func(args []string) ([]byte, error) {
 				var arg string
 				if len(args) == 1 {
