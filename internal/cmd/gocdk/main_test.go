@@ -111,11 +111,12 @@ func TestCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goroot, err := exec.Command("go", "env", "GOROOT").Output()
+	gorootOut, err := exec.Command("go", "env", "GOROOT").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.Setenv("PATH", fmt.Sprintf("%s%c%s/bin", cwd, os.PathListSeparator, strings.TrimSpace(string(goroot))))
+	goroot := strings.TrimSpace(string(gorootOut))
+	os.Setenv("PATH", fmt.Sprintf("%s%c%s/bin", cwd, os.PathListSeparator, goroot))
 	for _, fn := range testFilenames {
 		testName := strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))
 		t.Run(testName, func(t *testing.T) {
@@ -123,12 +124,11 @@ func TestCLI(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			tf.Setup = func() error {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return err
-				}
-				return os.Setenv("GOPATH", cwd)
+			// Set GOPATH to the parent of the test's root directory. That lets gocdk
+			// determine a module path, but doesn't clutter the root directory with
+			// the module cache (pkg/mod).
+			tf.Setup = func(rootDir string) error {
+				return os.Setenv("GOPATH", filepath.Dir(rootDir))
 			}
 			tf.Commands["ls"] = func(args []string) ([]byte, error) {
 				var arg string

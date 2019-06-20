@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+// TODO: test update
+// TODO: test input redirection
+
 package cmdtest
 
 import (
@@ -61,14 +65,13 @@ type TestFile struct {
 	// Echo each command and its output as it's run
 	Verbose bool
 
-	// // Run after creating the root directory.
-	// Setup func() error
+	// If non-nil, this function is called with the root directory after it has been made
+	// the current directory.
+	Setup func(string) error
 
 	// If true, don't delete the test's temporary root directory, and print it out
 	// its name for debugging.
 	KeepRootDir bool
-
-	Setup func() error
 
 	// Special commands that are not executed via exec.Command (like shell
 	// built-ins).
@@ -279,7 +282,7 @@ func (tf *TestFile) run() error {
 	defer func() { _ = os.Chdir(cwd) }()
 
 	if tf.Setup != nil {
-		if err := tf.Setup(); err != nil {
+		if err := tf.Setup(rootDir); err != nil {
 			return fmt.Errorf("%s: calling Setup: %v", tf.filename, err)
 		}
 	}
