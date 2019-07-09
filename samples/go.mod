@@ -19,7 +19,3 @@ replace gocloud.dev/pubsub/rabbitpubsub => ../pubsub/rabbitpubsub
 replace gocloud.dev/runtimevar/etcdvar => ../runtimevar/etcdvar
 
 replace gocloud.dev/secrets/hashivault => ../secrets/hashivault
-
-replace golang.org/x/xerrors => ../../../go/src/golang.org/x/xerrors
-
-go 1.13
