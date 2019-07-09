@@ -44,9 +44,16 @@ type frontend struct {
 }
 
 var (
-	listTemplate      = template.Must(template.ParseFiles("list.htmlt"))
-	orderFormTemplate = template.Must(template.ParseFiles("order-form.htmlt"))
+	listTemplate      *template.Template
+	orderFormTemplate *template.Template
 )
+
+func init() {
+	cwd, err := os.Getwd()
+	fmt.Println("####", cwd, err)
+	listTemplate = template.Must(template.ParseFiles("list.htmlt"))
+	orderFormTemplate = template.Must(template.ParseFiles("order-form.htmlt"))
+}
 
 // run starts the server on port and runs it indefinitely.
 func (f *frontend) run(ctx context.Context, port int) error {
